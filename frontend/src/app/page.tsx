@@ -25,7 +25,7 @@ export default function Home() {
           eventSource.close();
         } else {
           // Add the new character to the streamed text
-          setStreamedText(prev => prev + data.char);
+          setStreamedText(prev => prev + data.text);
         }
       } catch (error) {
         console.error('Error parsing SSE data:', error);
