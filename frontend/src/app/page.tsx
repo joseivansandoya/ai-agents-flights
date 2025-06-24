@@ -7,42 +7,73 @@ export default function Home() {
   const [isConnected, setIsConnected] = useState(false);
   const [isComplete, setIsComplete] = useState(false);
 
-  useEffect(() => {
-    const eventSource = new EventSource('http://localhost:5005/stream');
-
-    eventSource.onopen = () => {
-      console.log('SSE connection opened');
+  const [prompt, setPrompt] = useState("");
+  
+  const handleSubmit = async () => {
+    if (!prompt.trim()) return;
+    
+    // Reset states for new request
+    setStreamedText('');
+    setIsConnected(false);
+    setIsComplete(false);
+    
+    try {
       setIsConnected(true);
-    };
+      
+      const response = await fetch('http://localhost:5005/stream', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ prompt }),
+      });
 
-    eventSource.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        
-        if (data.type === 'end') {
-          console.log('Stream completed');
-          setIsComplete(true);
-          eventSource.close();
-        } else {
-          // Add the new character to the streamed text
-          setStreamedText(prev => prev + data.text);
-        }
-      } catch (error) {
-        console.error('Error parsing SSE data:', error);
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
       }
-    };
 
-    eventSource.onerror = (error) => {
-      console.error('SSE error:', error);
+      const reader = response.body?.getReader();
+      if (!reader) {
+        throw new Error('No response body reader available');
+      }
+
+      const decoder = new TextDecoder();
+      
+      while (true) {
+        const { done, value } = await reader.read();
+        
+        if (done) {
+          setIsComplete(true);
+          setIsConnected(false);
+          break;
+        }
+
+        const chunk = decoder.decode(value);
+        const lines = chunk.split('\n');
+        
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6));
+              
+              if (data.type === 'end') {
+                setIsComplete(true);
+                setIsConnected(false);
+                return;
+              } else if (data.text) {
+                setStreamedText(prev => prev + data.text);
+              }
+            } catch (error) {
+              console.error('Error parsing SSE data:', error);
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error in handleSubmit:', error);
       setIsConnected(false);
-      eventSource.close();
-    };
-
-    // Cleanup on component unmount
-    return () => {
-      eventSource.close();
-    };
-  }, []);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-gray-100 p-8">
@@ -50,6 +81,23 @@ export default function Home() {
         <h1 className="text-3xl font-bold text-gray-800 mb-8">
           AI Agents Flights - SSE Demo
         </h1>
+
+        <div className='my-4'>
+          <input
+            type="text"
+            className='bg-white p-3'
+            placeholder='Enter your prompt...'
+            value={prompt}
+            onChange={e => setPrompt(e.target.value)}
+          />
+          <button
+            type="button"
+            className='p-3 border border-black cursor-pointer'
+            onClick={handleSubmit}
+          >
+            SEND
+          </button>
+        </div>
         
         <div className="bg-white rounded-lg shadow-lg p-6">
           <div className="mb-4">
@@ -81,16 +129,6 @@ export default function Home() {
             <p>Characters received: {streamedText.length}</p>
             <p>Status: {isComplete ? 'Stream completed' : isConnected ? 'Streaming...' : 'Connecting...'}</p>
           </div>
-        </div>
-        
-        <div className="mt-8 bg-blue-50 rounded-lg p-4">
-          <h3 className="font-semibold text-blue-800 mb-2">How it works:</h3>
-          <ul className="text-blue-700 text-sm space-y-1">
-            <li>• Backend streams a lorem ipsum paragraph character by character</li>
-            <li>• Each character is sent as an SSE event with a 50ms delay</li>
-            <li>• Frontend receives events in real-time and displays them</li>
-            <li>• Connection status is shown with a colored indicator</li>
-          </ul>
         </div>
       </div>
     </div>
