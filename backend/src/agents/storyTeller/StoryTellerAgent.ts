@@ -1,8 +1,8 @@
 import { Agent, Runner } from "@openai/agents";
 
 interface StoryTellerAgentCallbacks {
-  onTextStream: (text: string) => void;
-  onCompleted: () => void;
+  onTextStream?: (text: string) => void;
+  onCompleted?: () => void;
 }
 
 export class StoryTellerAgent {
@@ -36,11 +36,11 @@ export class StoryTellerAgent {
     );
 
     for await (const text of storyStream.toTextStream()) {
-      this.callbacks.onTextStream(text);
+      this.callbacks.onTextStream?.(text);
     }
 
     // waiting to make sure that we are done with handling the stream
     await storyStream.completed;
-    this.callbacks.onCompleted();
+    this.callbacks.onCompleted?.();
   }
 }

@@ -1,6 +1,6 @@
 import { Request, Response, Router } from "express";
 
-import { StoryTellerAgent } from "../../agents/storyTeller/storyTellerAgent"
+import { StoryTellerAgent } from "../../agents/storyTeller/StoryTellerAgent"
 
 const agentRouter = Router();
 
