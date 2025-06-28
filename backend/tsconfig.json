@@ -40,13 +40,7 @@
     "baseUrl": "./src",
     "paths": {
       "@/*": ["*"],
-      "@/types/*": ["types/*"],
-      "@/utils/*": ["utils/*"],
-      "@/middleware/*": ["middleware/*"],
-      "@/routes/*": ["routes/*"],
-      "@/controllers/*": ["controllers/*"],
-      "@/services/*": ["services/*"],
-      "@/config/*": ["config/*"]
+      "@/src/*": ["src/*"],
     },
     
     // Node.js specific settings

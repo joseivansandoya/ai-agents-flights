@@ -20,7 +20,7 @@ export default function Home() {
     try {
       setIsConnected(true);
       
-      const response = await fetch('http://localhost:5005/stream', {
+      const response = await fetch('http://localhost:5005/agent', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
