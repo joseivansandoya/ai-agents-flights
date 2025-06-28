@@ -1,22 +1,12 @@
-import "dotenv/config";
-import { Agent, Runner } from "@openai/agents";
 import { Request, Response, Router } from "express";
 
-const storyTellerAgent = new Agent({
-  name: 'Storyteller',
-  instructions:
-    'You are a talented story teller that can tell an engaging 3-4 paragraph story on any topic.',
-});
-
-const runner = new Runner({
-  model: 'gpt-4.1-mini',
-});
+import { StoryTellerAgent } from "../../agents/storyTeller/storyTellerAgent"
 
 const agentRouter = Router();
 
 agentRouter.post("/", async (req: Request, res: Response) => {
   const { prompt } = req.body;
-  
+
   // Set headers for SSE
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
@@ -26,22 +16,17 @@ agentRouter.post("/", async (req: Request, res: Response) => {
     "Access-Control-Allow-Headers": "Cache-Control"
   });
 
-  // Stream AI Agent response
-  const storyStream = await runner.run(
-    storyTellerAgent,
-    prompt,
-    {
-      // enable streaming
-      stream: true,
+  const agent = new StoryTellerAgent({
+    onTextStream: (text) => {
+      res.write(`data: ${JSON.stringify({ text })}\n\n`);
     },
-  );
-  for await (const text of storyStream.toTextStream()) {
-    res.write(`data: ${JSON.stringify({ text })}\n\n`);
-  }
-  // waiting to make sure that we are done with handling the stream
-  await storyStream.completed;
-  res.write(`data: ${JSON.stringify({ type: "end" })}\n\n`);
-  res.end();
+    onCompleted: () => {
+      res.write(`data: ${JSON.stringify({ type: "end" })}\n\n`);
+      res.end();
+    }
+  });
+
+  await agent.run(prompt);
 
   // Handle client disconnect
   req.on("close", () => {
