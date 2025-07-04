@@ -1,6 +1,6 @@
 import { Request, Response, Router } from "express";
 
-import { StoryTellerAgent } from "../../agents/storyTeller/StoryTellerAgent"
+import { FlightsAgent } from "../../agents/flightsAgent/FlightsAgent";
 
 const agentRouter = Router();
 
@@ -16,13 +16,16 @@ agentRouter.post("/", async (req: Request, res: Response) => {
     "Access-Control-Allow-Headers": "Cache-Control"
   });
 
-  const agent = new StoryTellerAgent({
+  const agent = new FlightsAgent({
     onTextStream: (text) => {
       res.write(`data: ${JSON.stringify({ text })}\n\n`);
     },
     onCompleted: () => {
       res.write(`data: ${JSON.stringify({ type: "end" })}\n\n`);
       res.end();
+    },
+    onError: (error) => {
+      res.write(`data: ${JSON.stringify({ text: error })}\n\n`);
     }
   });
 
