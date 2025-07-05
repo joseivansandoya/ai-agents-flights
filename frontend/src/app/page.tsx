@@ -6,6 +6,7 @@ export default function Home() {
   const [streamedText, setStreamedText] = useState('');
   const [isConnected, setIsConnected] = useState(false);
   const [isComplete, setIsComplete] = useState(false);
+  const [lastResponseId, setLastResponseId] = useState<string>();
 
   const [prompt, setPrompt] = useState("");
   
@@ -25,7 +26,7 @@ export default function Home() {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ prompt }),
+        body: JSON.stringify({ prompt, lastResponseId }),
       });
 
       if (!response.ok) {
@@ -59,6 +60,7 @@ export default function Home() {
               if (data.type === 'end') {
                 setIsComplete(true);
                 setIsConnected(false);
+                setLastResponseId(data.lastResponseId);
                 return;
               } else if (data.text) {
                 setStreamedText(prev => prev + data.text);

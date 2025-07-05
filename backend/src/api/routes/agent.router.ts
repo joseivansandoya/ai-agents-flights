@@ -1,11 +1,13 @@
 import { Request, Response, Router } from "express";
 
-import { FlightsAgent } from "../../agents/flightsAgent/FlightsAgent";
+// import { FlightsAgent } from "../../agents/flightsAgent/FlightsAgent";
+import { ChatAgent } from "../../agents/chatAgent/ChatAgent";
 
 const agentRouter = Router();
 
 agentRouter.post("/", async (req: Request, res: Response) => {
-  const { prompt } = req.body;
+  const { prompt, lastResponseId } = req.body;
+  console.log('>>> lastResponseId-RECEIVED', lastResponseId);
 
   // Set headers for SSE
   res.writeHead(200, {
@@ -16,12 +18,12 @@ agentRouter.post("/", async (req: Request, res: Response) => {
     "Access-Control-Allow-Headers": "Cache-Control"
   });
 
-  const agent = new FlightsAgent({
+  const agent = new ChatAgent({
     onTextStream: (text) => {
       res.write(`data: ${JSON.stringify({ text })}\n\n`);
     },
-    onCompleted: () => {
-      res.write(`data: ${JSON.stringify({ type: "end" })}\n\n`);
+    onCompleted: (lastResponseId?: string) => {
+      res.write(`data: ${JSON.stringify({ type: "end", lastResponseId })}\n\n`);
       res.end();
     },
     onError: (error) => {
@@ -29,7 +31,7 @@ agentRouter.post("/", async (req: Request, res: Response) => {
     }
   });
 
-  await agent.run(prompt);
+  await agent.run(prompt, lastResponseId);
 
   // Handle client disconnect
   req.on("close", () => {
