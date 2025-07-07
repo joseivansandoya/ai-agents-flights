@@ -1,13 +1,11 @@
 import { Request, Response, Router } from "express";
 
-// import { FlightsAgent } from "../../agents/flightsAgent/FlightsAgent";
-import { ChatAgent } from "../../agents/chatAgent/ChatAgent";
+import { FlightsAgent } from "../../agents/flightsAgent/FlightsAgent";
 
 const agentRouter = Router();
 
 agentRouter.post("/", async (req: Request, res: Response) => {
   const { prompt, lastResponseId } = req.body;
-  console.log('>>> lastResponseId-RECEIVED', lastResponseId);
 
   // Set headers for SSE
   res.writeHead(200, {
@@ -18,7 +16,7 @@ agentRouter.post("/", async (req: Request, res: Response) => {
     "Access-Control-Allow-Headers": "Cache-Control"
   });
 
-  const agent = new ChatAgent({
+  const agent = new FlightsAgent({
     onTextStream: (text) => {
       res.write(`data: ${JSON.stringify({ text })}\n\n`);
     },
