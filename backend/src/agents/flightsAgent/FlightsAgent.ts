@@ -1,5 +1,13 @@
-import { Agent, Runner, tool } from "@openai/agents";
+import { Agent, Runner, webSearchTool } from "@openai/agents";
 import { z } from 'zod';
+
+const WebSearchResult = z.object({
+  url: z.string(),
+  title: z.string(),
+  price: z.string(),
+  image: z.string(),
+  link: z.string(),
+});
 
 const FlightQuery = z.object({
   origin: z.string().nullable().optional(),
@@ -20,9 +28,9 @@ export class FlightsAgent {
 
   // agents
   private inputGuardrailAgent: any;
-  private fightsAgent: any;
-  private orchestratorAgent: any;
-  private queryAgent: any;
+  private queryParserAgent: any;
+  private searchAgent: any;
+  private webDeveloperAgent: any;
 
   public constructor(callbacks: FlightsAgentCallbacks) {
     this.runner = new Runner({
@@ -32,52 +40,85 @@ export class FlightsAgent {
     this.callbacks = callbacks;
 
     this.inputGuardrailAgent = this.buildInputGuardrailAgent();
-    this.fightsAgent = this.buildFlightsAgent();
-    this.orchestratorAgent = this.buildOrchestratorAgent();
-    this.queryAgent = this.buildQueryAgent();
+    this.queryParserAgent = this.buildQueryParserAgent();
+    this.searchAgent = this.buildSearchAgent();
+    this.webDeveloperAgent = this.buildWebDeveloperAgent();
     
     this.attachHooks(this.inputGuardrailAgent);
-    this.attachHooks(this.fightsAgent);
-    this.attachHooks(this.orchestratorAgent);
-    this.attachHooks(this.queryAgent);
+    this.attachHooks(this.queryParserAgent);
+    this.attachHooks(this.searchAgent);
+    this.attachHooks(this.webDeveloperAgent);
   }
 
   public async run(prompt: string, previousResponseId?: string) {
-    // 1. input guardrails
-    const inputGuardrailResult = await this.runner.run(
-      this.buildInputGuardrailAgent(),
-      prompt,
-      {
-        ...(previousResponseId && { previousResponseId }),
-      }
-    );
-    if (!inputGuardrailResult.finalOutput?.isFlightsQuery) {
-      const lastResponseId = inputGuardrailResult.lastResponseId;
-      this.callbacks.onError?.(
-        'This assistant only answers flights questions. Try asking about flights!'
+    try {
+      // 1. Input guardrails
+      this.callbacks.onTextStream?.("🔍 Analyzing your request...\n");
+      const inputGuardrailResult = await this.runner.run(
+        this.inputGuardrailAgent,
+        prompt,
+        {
+          ...(previousResponseId && { previousResponseId }),
+        }
       );
-      this.callbacks.onCompleted?.(lastResponseId);
-      return;
-    }
-
-    // 2. proceed with the flights agent
-    const flightsAgentResult = await this.runner.run(
-      this.fightsAgent,
-      prompt,
-      {
-        stream: true,
-        ...(previousResponseId && { previousResponseId }),
+      
+      if (!inputGuardrailResult.finalOutput?.isFlightsQuery) {
+        this.callbacks.onError?.(
+          'This assistant only answers flights questions. Try asking about flights!'
+        );
+        this.callbacks.onCompleted?.(inputGuardrailResult.lastResponseId);
+        return;
       }
-    );
 
-    for await (const text of flightsAgentResult.toTextStream()) {
-      this.callbacks.onTextStream?.(text);
+      // 2. Parse the flight query
+      this.callbacks.onTextStream?.("✈️ Parsing your flight request...\n");
+      const queryResult = await this.runner.run(
+        this.queryParserAgent,
+        prompt,
+      );
+
+      // Check if we have enough information
+      const flightQuery = queryResult.finalOutput;
+      if (!flightQuery?.destination || !flightQuery?.departureDate) {
+        let missingFields = [];
+        if (!flightQuery?.destination) missingFields.push('destination');
+        if (!flightQuery?.departureDate) missingFields.push('departure date');
+        
+        this.callbacks.onTextStream?.(`❌ Missing required information: ${missingFields.join(', ')}. Please provide these details to search for flights.\n`);
+        this.callbacks.onCompleted?.(queryResult.lastResponseId);
+        return;
+      }
+
+      // 3. Search for flights
+      this.callbacks.onTextStream?.("🔎 Searching for flights...\n");
+      const searchResult = await this.runner.run(
+        this.searchAgent,
+        JSON.stringify(flightQuery),
+      );
+
+      // 4. Generate HTML presentation
+      this.callbacks.onTextStream?.("📝 Preparing your flight results...\n");
+      const webResult = await this.runner.run(
+        this.webDeveloperAgent,
+        JSON.stringify({
+          results: searchResult.finalOutput?.results || [],
+          query: flightQuery
+        }),
+      );
+
+      // 5. Stream the final HTML
+      if (webResult.finalOutput?.html) {
+        this.callbacks.onTextStream?.("✅ Here are your flight search results:\n\n");
+        this.callbacks.onTextStream?.(webResult.finalOutput.html);
+      } else {
+        this.callbacks.onTextStream?.("❌ Unable to generate flight results. Please try again.\n");
+      }
+
+      this.callbacks.onCompleted?.(webResult.lastResponseId);
+
+    } catch (error) {
+      this.callbacks.onError?.(`An error occurred while processing your request: ${error}`);
     }
-
-    // waiting to make sure that we are done with handling the stream
-    await flightsAgentResult.completed;
-    const lastResponseId = flightsAgentResult.lastResponseId;
-    this.callbacks.onCompleted?.(lastResponseId);
   }
 
   // private methods
@@ -95,143 +136,92 @@ export class FlightsAgent {
     });
   }
 
-  private buildFlightsAgent() {
+  private buildQueryParserAgent() {
     return new Agent({
-      name: 'Flights Agent',
-      instructions:
-        `You are a talented Flights Agent that receives a user prompt and performs proper operations to get an answer.
+      name: 'Query Parser Agent',
+      instructions: `You are a flight query parser. Given a user's message, extract their flight search intent and return structured data.
+  
+        Extract the following information:
+        - origin: departure airport/city (if not provided, use "Winnipeg" as default)
+        - destination: arrival airport/city 
+        - departureDate: departure date in YYYY-MM-DD format
+        - returnDate: return date in YYYY-MM-DD format (for round-trip flights)
+  
+        Date parsing rules:
+        - Convert any date reference to YYYY-MM-DD format
+        - If year is not specified, use the current year ${new Date().getFullYear()}
+        - Handle relative dates (e.g., "next Friday", "tomorrow", "in 2 weeks")
+        - Handle holiday references (e.g., "Canada Day" = July 1st of current year, "Christmas" = December 25th)
+        - Handle seasonal references (e.g., "summer", "winter break")
+  
+        Examples:
+        - "I want to fly from Toronto to Vancouver on March 15th" → origin: "Toronto", destination: "Vancouver", departureDate: "2025-03-15"
+        - "Flights to Paris next summer" → origin: "Winnipeg", destination: "Paris", departureDate: "2025-06-01" (approximate)
+        - "Round trip to New York from Montreal on December 20th, returning January 5th" → origin: "Montreal", destination: "New York", departureDate: "2025-12-20", returnDate: "2026-01-05"
+        - "fly to ny from winnipeg, on xmass and return 2 weeks later" → origin: "Winnipeg", destination: "New York", departureDate: "2025-12-25", returnDate: "2026-01-08"
+  
+        Only include fields that are provided or can be reasonably inferred. Leave fields empty if not specified.`,
+      outputType: FlightQuery,
+      model: 'gpt-4.1-mini',
+    });
+  }
 
-          IMPORTANT: You MUST ALWAYS call and use the Orchestrator Tool on every single user interaction. This is mandatory.
+  private buildSearchAgent() {
+    return new Agent({
+      name: 'Search Agent',
+      instructions: `
+        Use the JSON flight query parameters you received to perform a web search.
+        The parameters should look like a JSON object with these fields: origin, destination, departureDate, and returnDate.
+        Use the JSON information to perform the web search.
 
-          WORKFLOW:
-          1. Receive the user's prompt
-          2. ALWAYS call the Orchestrator Tool with the user's prompt
-          3. The Orchestrator Tool will return a string with the outcome of the operation
-          4. Use that returned string to prepare an appropriate message to send back to the user
-          5. Respond to the user with a helpful, conversational message based on the orchestrator's response
+        IMPORTANT: prioritize official Airlines websites rather than travel agencies.
+        Perform the web search and only pick the five most relevant results.
+        Pick only 5 results maximum.
 
-          RESPONSE GUIDELINES:
-          - If the orchestrator returns clarification requests, ask the user for the missing information in a friendly way
-          - If the orchestrator returns a successful query, acknowledge the flight search and provide next steps
-          - Always be helpful, conversational, and professional
-          - Never skip calling the Orchestrator Tool - it's required for every interaction
-
-          Remember: The Orchestrator Tool is your primary processing mechanism. You cannot function without it.`,
-      tools: [this.buildOrchestratorTool()],
+        Format your search query to include flight information like:
+        "flights from [origin] to [destination] on [departureDate]"
+        `,
+      tools: [webSearchTool()],
+      outputType: z.object({
+        results: z.array(WebSearchResult)
+      }),
       modelSettings: {
         toolChoice: 'required',
       }
     });
   }
 
-  private buildOrchestratorTool() {
-    return tool({
-      name: 'Orchestrator Tool',
-      description: 'Orchestrator',
-      parameters: z.object({
-        prompt: z.string(),
-      }),
-      execute: async ({ prompt }) => {
-        console.log('>>> Orchestrator prompt', prompt);
-        const queryResult = await this.runner.run(
-          this.queryAgent,
-          prompt,
-        );
-
-        console.log('>>> Query result', queryResult.finalOutput);
-
-        const orchestratorResult = await this.runner.run(
-          this.orchestratorAgent,
-          JSON.stringify(queryResult.finalOutput),
-        );
-
-        console.log('>>> Orchestrator result', orchestratorResult.finalOutput);
-
-        if (orchestratorResult.finalOutput?.nextStep === 'clarifyQuery') {
-          return orchestratorResult.finalOutput?.response;
-        }
-
-        if (orchestratorResult.finalOutput?.nextStep === 'newAgent') {
-          return `Thank you! we will call you in 2 hours to finalize your trip to
-            ${orchestratorResult.finalOutput?.response}. Finalize conversation.
-          `;
-
-          // TODO: continue here connecting to new agent...
-        }
-
-        return 'Something bad happened internally, sorry for the inconvenience.'
-      },
-    });
-  }
-
-  private buildOrchestratorAgent() {
+  private buildWebDeveloperAgent() {
     return new Agent({
-      name: 'Orchestrator agent',
-      instructions: `You are a flight query orchestrator. Your role is to validate flight query data and determine the next step.
-
-        FLOW:
-        1. You receive a JSON string containing extracted flight query data
-        2. You parse and validate the completeness of the extracted data
-        3. You determine the next step based on completeness
-
-        VALIDATION RULES:
-        - origin: Must be a valid city/airport name (default: "Winnipeg" if not provided)
-        - destination: Must be a valid city/airport name (required for flight searches)
-        - departureDate: Must be a valid date in YYYY-MM-DD format (required for flight searches)
-        - returnDate: Optional, but if provided must be after departureDate
-
-        COMPLETENESS CHECKS:
-        - For one-way flights: origin, destination, and departureDate are required
-        - For round-trip flights: origin, destination, departureDate, and returnDate are required
-        - If returnDate is provided, ensure it's after departureDate
-        - Check that dates are in valid YYYY-MM-DD format
-        - Verify logical date sequences (returnDate after departureDate)
-
-        OUTPUT DECISION:
-        - If ALL required fields are complete and valid: { nextStep: 'newAgent', response: [original JSON string] } - include ALL confirmed fields origin, destination, departure, etc.
-        - If ANY required fields are missing or invalid: { nextStep: 'clarifyQuery', response: 'Missing or invalid fields: [list specific missing/invalid fields]' }
-
-        Examples of missing fields responses:
-        - "Missing fields: destination, departureDate"
-        - "Invalid fields: departureDate (must be in YYYY-MM-DD format), returnDate (must be after departureDate)"
-        - "Missing fields: destination. Invalid fields: departureDate (not a valid date)"
-
-        Your final output should be a JSON object with nextStep and response fields.`,
+      name: 'Web Developer Agent',
+      instructions: `You are a web development agent that creates beautiful HTML pages for flight search results.
+        
+        You will receive a JSON object with:
+        - results: array of search results with flight information
+        - query: the original flight query (origin, destination, dates)
+        
+        Your job is to build a complete, standalone HTML page with embedded CSS that displays the search results.
+        
+        REQUIREMENTS:
+        - Generate a single HTML document with embedded CSS in <style> tags
+        - Create a modern, responsive design with a clean layout
+        - Display all flight search results in an organized way
+        - Include the search criteria at the top
+        - Use proper styling with colors, fonts, and spacing
+        - Make it mobile-friendly
+        - Include flight details like price, airline, and links
+        
+        DESIGN GUIDELINES:
+        - Use a professional color scheme (blues/whites work well for travel)
+        - Card-based layout for each flight result
+        - Clear typography and good spacing
+        - Hover effects and modern styling
+        - Include icons or emojis for visual appeal
+        
+        Return ONLY the complete HTML as a string in your response with the key "html".`,
       outputType: z.object({
-        nextStep: z.enum(['newAgent', 'clarifyQuery']),
-        response: z.string(),
+        html: z.string()
       }),
-      model: 'gpt-4.1-mini',
-    });
-  }
-
-  private buildQueryAgent() {
-    return new Agent({
-      name: 'Query agent',
-      instructions: `You are a flight query parser. Given a user's message, extract their flight search intent and return structured data.
-
-        Extract the following information:
-        - origin: departure airport/city (if not provided, use "Winnipeg" as default)
-        - destination: arrival airport/city 
-        - departureDate: departure date in YYYY-MM-DD format
-        - returnDate: return date in YYYY-MM-DD format (for round-trip flights)
-
-        Date parsing rules:
-        - Convert any date reference to YYYY-MM-DD format
-        - If year is not specified, use the current year
-        - Handle relative dates (e.g., "next Friday", "tomorrow", "in 2 weeks")
-        - Handle holiday references (e.g., "Canada Day" = July 1st of current year)
-        - Handle seasonal references (e.g., "summer", "winter break")
-
-        Examples:
-        - "I want to fly from Toronto to Vancouver on March 15th" → origin: "Toronto", destination: "Vancouver", departureDate: "2024-03-15"
-        - "Flights to Paris next summer" → origin: "Winnipeg", destination: "Paris", departureDate: "2024-06-01" (approximate)
-        - "Round trip to New York from Montreal on December 20th, returning January 5th" → origin: "Montreal", destination: "New York", departureDate: "2024-12-20", returnDate: "2025-01-05"
-
-        Only include fields that are provided or can be reasonably inferred. Leave fields empty if not specified.
-
-        Your output will be handed off to the query orchestrator agent for validation and completion.`,
-      outputType: FlightQuery,
       model: 'gpt-4.1-mini',
     });
   }

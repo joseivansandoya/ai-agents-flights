@@ -4,9 +4,11 @@ import { useEffect, useState } from 'react';
 
 export default function Home() {
   const [streamedText, setStreamedText] = useState('');
+  const [htmlContent, setHtmlContent] = useState('');
   const [isConnected, setIsConnected] = useState(false);
   const [isComplete, setIsComplete] = useState(false);
   const [lastResponseId, setLastResponseId] = useState<string>();
+  const [showHtml, setShowHtml] = useState(false);
 
   const [prompt, setPrompt] = useState("");
   
@@ -15,8 +17,10 @@ export default function Home() {
     
     // Reset states for new request
     setStreamedText('');
+    setHtmlContent('');
     setIsConnected(false);
     setIsComplete(false);
+    setShowHtml(false);
     
     try {
       setIsConnected(true);
@@ -63,7 +67,23 @@ export default function Home() {
                 setLastResponseId(data.lastResponseId);
                 return;
               } else if (data.text) {
-                setStreamedText(prev => prev + data.text);
+                setStreamedText(prev => {
+                  const newText = prev + data.text;
+                  
+                  // Check if we have HTML content
+                  const htmlMatch = newText.match(/<!DOCTYPE html>[\s\S]*<\/html>/);
+                  if (htmlMatch) {
+                    setHtmlContent(htmlMatch[0]);
+                    // Auto-switch to HTML view when results are ready
+                    setTimeout(() => setShowHtml(true), 500);
+                    
+                    // Return only the progress text (before HTML)
+                    const progressText = newText.substring(0, newText.indexOf('<!DOCTYPE html>'));
+                    return progressText;
+                  }
+                  
+                  return newText;
+                });
               }
             } catch (error) {
               console.error('Error parsing SSE data:', error);
@@ -104,7 +124,7 @@ export default function Home() {
         <div className="bg-white rounded-lg shadow-lg p-6">
           <div className="mb-4">
             <h2 className="text-xl font-semibold text-gray-700 mb-2">
-              Streamed Text (Server-Sent Events)
+              Flight Search Results
             </h2>
             
             <div className="flex items-center gap-2 mb-4">
@@ -115,20 +135,40 @@ export default function Home() {
               {isComplete && (
                 <span className="text-sm text-green-600 font-medium">✓ Complete</span>
               )}
+              {htmlContent && (
+                <button
+                  onClick={() => setShowHtml(!showHtml)}
+                  className="ml-auto px-3 py-1 text-sm bg-blue-500 text-white rounded hover:bg-blue-600"
+                >
+                  {showHtml ? 'Show Progress' : 'Show Results'}
+                </button>
+              )}
             </div>
           </div>
           
-          <div className="bg-gray-50 rounded-md p-4 min-h-[200px]">
-            <p className="text-gray-800 leading-relaxed whitespace-pre-wrap">
-              {streamedText || 'Waiting for stream to start...'}
-            </p>
-            {streamedText && (
-              <span className="inline-block w-2 h-4 bg-blue-500 animate-pulse ml-1"></span>
-            )}
-          </div>
+          {!showHtml ? (
+            <div className="bg-gray-50 rounded-md p-4 min-h-[200px]">
+              <p className="text-gray-800 leading-relaxed whitespace-pre-wrap">
+                {streamedText || 'Waiting for stream to start...'}
+              </p>
+              {streamedText && !isComplete && (
+                <span className="inline-block w-2 h-4 bg-blue-500 animate-pulse ml-1"></span>
+              )}
+            </div>
+          ) : (
+            <div className="border rounded-md overflow-hidden">
+              <iframe
+                srcDoc={htmlContent}
+                className="w-full h-[600px] border-0"
+                title="Flight Search Results"
+                sandbox="allow-same-origin allow-scripts allow-popups allow-forms"
+              />
+            </div>
+          )}
           
           <div className="mt-4 text-sm text-gray-500">
-            <p>Characters received: {streamedText.length}</p>
+            <p>Progress characters: {streamedText.length}</p>
+            <p>HTML characters: {htmlContent.length}</p>
             <p>Status: {isComplete ? 'Stream completed' : isConnected ? 'Streaming...' : 'Connecting...'}</p>
           </div>
         </div>
